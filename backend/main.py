@@ -1,20 +1,21 @@
 import os
 import uuid
-import shutil
-import logging
+import sys
+import traceback
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from converter import FileConverter
+from fastapi.responses import JSONResponse, FileResponse
 
-# Configure logging to see errors in Vercel logs
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Try to import converter with explicit error catching
+try:
+    from converter import FileConverter
+    IMPORT_ERROR = None
+except Exception as e:
+    IMPORT_ERROR = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
 
 app = FastAPI()
 
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,53 +24,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Vercel-friendly storage (/tmp is the only writable directory)
+# Vercel-friendly storage
 IS_CLOUD = os.environ.get('VERCEL') == '1'
 TMP_BASE = Path("/tmp") if IS_CLOUD else Path(".")
 
 UPLOAD_DIR = TMP_BASE / "uploads"
 DOWNLOAD_DIR = TMP_BASE / "downloads"
 
-# Ensure directories exist
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    DIR_ERROR = None
+except Exception as e:
+    DIR_ERROR = str(e)
 
-converter = FileConverter(str(UPLOAD_DIR), str(DOWNLOAD_DIR))
+if not IMPORT_ERROR:
+    try:
+        converter = FileConverter(str(UPLOAD_DIR), str(DOWNLOAD_DIR))
+        CONVERTER_ERROR = None
+    except Exception as e:
+        CONVERTER_ERROR = str(e)
+else:
+    converter = None
+    CONVERTER_ERROR = "Module import failed"
 
-# In-memory task status storage (Note: will not persist across serverless instances)
 tasks = {}
 
-def conversion_task(task_id: str, input_filename: str, target_format: str):
-    try:
-        tasks[task_id]["status"] = "processing"
-        output_path = converter.process_conversion(input_filename, target_format)
-        tasks[task_id]["status"] = "completed"
-        tasks[task_id]["output_file"] = str(output_path.name)
-        logger.info(f"Task {task_id} completed successfully.")
-    except Exception as e:
-        logger.error(f"Task {task_id} failed: {e}")
-        tasks[task_id]["status"] = "failed"
-        tasks[task_id]["error"] = str(e)
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal Server Error", "detail": str(exc), "traceback": traceback.format_exc()}
+    )
 
 @app.post("/api/upload")
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_format: str = "pdf"):
-    # Vercel Free Tier Payload Limit is 4.5MB
+    if IMPORT_ERROR or CONVERTER_ERROR:
+        raise HTTPException(status_code=500, detail=f"System Error: {IMPORT_ERROR or CONVERTER_ERROR}")
+
+    # Vercel Free Tier Payload Limit
     MAX_SIZE = 4 * 1024 * 1024 
     content = await file.read()
     
     if len(content) > MAX_SIZE:
-        raise HTTPException(status_code=413, detail="File too large. Max 4MB on Vercel.")
+        return JSONResponse(status_code=413, content={"error": "File too large", "detail": "Max 4MB on Vercel."})
     
     file_id = str(uuid.uuid4())
     input_filename = f"{file_id}_{file.filename}"
     input_path = UPLOAD_DIR / input_filename
     
-    try:
-        with open(input_path, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        logger.error(f"Failed to write file: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error during upload.")
+    with open(input_path, "wb") as f:
+        f.write(content)
     
     task_id = file_id
     tasks[task_id] = {
@@ -78,36 +83,48 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
         "target_format": target_format
     }
     
-    background_tasks.add_task(conversion_task, task_id, input_filename, target_format)
-    return {"task_id": task_id}
+    # Run conversion
+    try:
+        tasks[task_id]["status"] = "processing"
+        output_path = converter.process_conversion(input_filename, target_format)
+        tasks[task_id]["status"] = "completed"
+        tasks[task_id]["output_file"] = str(output_path.name)
+        return {"task_id": task_id, "status": "completed"}
+    except Exception as e:
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["error"] = str(e)
+        return JSONResponse(status_code=500, content={"error": "Conversion failed", "detail": str(e)})
 
 @app.get("/api/status/{task_id}")
 async def get_status(task_id: str):
     if task_id not in tasks:
-        # Fallback for serverless instance reset
-        return {"status": "failed", "error": "Task context lost due to serverless restart. Please try again."}
+        return {"status": "failed", "error": "Task not found"}
     return tasks[task_id]
 
 @app.get("/api/download/{task_id}")
-async def download_file(task_id: str, background_tasks: BackgroundTasks):
+async def download_file(task_id: str):
     if task_id not in tasks or tasks[task_id]["status"] != "completed":
-        raise HTTPException(status_code=404, detail="File not ready or task not found")
+        raise HTTPException(status_code=404, detail="File not ready")
     
-    output_filename = tasks[task_id]["output_file"]
-    file_path = DOWNLOAD_DIR / output_filename
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk")
-    
-    return FileResponse(path=file_path, filename=output_filename, media_type='application/octet-stream')
+    file_path = DOWNLOAD_DIR / tasks[task_id]["output_file"]
+    return FileResponse(path=file_path, filename=tasks[task_id]["output_file"])
 
-@app.get("/api/health")
-async def health():
-    return {"status": "ok", "platform": "vercel" if IS_CLOUD else "local"}
+@app.get("/api/debug")
+async def debug():
+    return {
+        "import_error": IMPORT_ERROR,
+        "dir_error": DIR_ERROR,
+        "converter_error": CONVERTER_ERROR,
+        "cwd": os.getcwd(),
+        "sys_path": sys.path,
+        "is_cloud": IS_CLOUD,
+        "python_version": sys.version
+    }
 
 @app.get("/")
+@app.get("/api")
 async def root():
-    return {"message": "EasyConverter API is live!"}
+    return {"message": "EasyConverter API is live!", "debug_url": "/api/debug"}
 
 if __name__ == "__main__":
     import uvicorn
