@@ -1,0 +1,14 @@
+node_modules/
+dist/
+uploads/
+downloads/
+backend/__pycache__/
+backend/.venv/
+.venv/
+backend/venv/
+venv/
+*.pyc
+.git/
+.netlify/
+netlify.toml
+.netlifyignore

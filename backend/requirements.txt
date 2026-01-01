@@ -1,0 +1,10 @@
+fastapi
+mangum
+python-multipart
+python-pptx
+Pillow
+PyMuPDF
+python-dotenv
+# Windows-only for high-quality Office conversion
+comtypes; sys_platform == 'win32'
+docx2pdf; sys_platform == 'win32'
