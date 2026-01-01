@@ -7,7 +7,12 @@ try:
 except ImportError:
     HAS_PDF2DOCX = False
 
-from docx2pdf import convert as docx2pdf_convert
+try:
+    from docx2pdf import convert as docx2pdf_convert
+    HAS_DOCX2PDF = True
+except ImportError:
+    HAS_DOCX2PDF = False
+
 from pptx import Presentation
 import fitz # PyMuPDF
 from PIL import Image
@@ -34,7 +39,7 @@ class FileConverter:
 
     def convert_docx_to_pdf(self, input_path, output_path):
         # On Windows, docx2pdf uses Microsoft Word.
-        if os.name != 'nt':
+        if not HAS_DOCX2PDF or os.name != 'nt':
              raise ImportError("DOCX to PDF conversion (High Quality) is not supported on this platform. Please run locally or use an alternative.")
         docx2pdf_convert(str(input_path), str(output_path))
         return output_path
