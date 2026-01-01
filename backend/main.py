@@ -2,14 +2,13 @@ import os
 import uuid
 import shutil
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from converter import FileConverter
-from mangum import Mangum
 
 app = FastAPI()
-handler = Mangum(app)
+api_router = APIRouter(prefix="/api")
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -44,7 +43,7 @@ def conversion_task(task_id: str, input_filename: str, target_format: str):
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = str(e)
 
-@app.post("/upload")
+@api_router.post("/upload")
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_format: str = "pdf"):
     # File size limit (e.g., 10MB)
     MAX_SIZE = 10 * 1024 * 1024
@@ -70,13 +69,13 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     
     return {"task_id": task_id}
 
-@app.get("/status/{task_id}")
+@api_router.get("/status/{task_id}")
 async def get_status(task_id: str):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     return tasks[task_id]
 
-@app.get("/download/{task_id}")
+@api_router.get("/download/{task_id}")
 async def download_file(task_id: str, background_tasks: BackgroundTasks):
     if task_id not in tasks or tasks[task_id]["status"] != "completed":
         raise HTTPException(status_code=404, detail="File not ready or task not found")
@@ -102,13 +101,16 @@ def cleanup_files(task_id: str):
             input_path.unlink()
         if output_path.exists():
             output_path.unlink()
-        
-        # Optionally remove from tasks dict
-        # del tasks[task_id]
 
-@app.get("/ping")
-async def ping():
-    return {"status": "ok", "message": "EasyConverter backend is live!"}
+@api_router.get("/health")
+async def health():
+    return {"status": "ok", "environment": "cloud" if IS_CLOUD else "local"}
+
+app.include_router(api_router)
+
+@app.get("/")
+async def root():
+    return {"message": "EasyConverter API is running"}
 
 if __name__ == "__main__":
     import uvicorn
