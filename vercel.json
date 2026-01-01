@@ -3,10 +3,7 @@
     "builds": [
         {
             "src": "package.json",
-            "use": "@vercel/static-build",
-            "config": {
-                "distDir": "dist"
-            }
+            "use": "@vercel/static-build"
         },
         {
             "src": "backend/main.py",
@@ -16,7 +13,7 @@
     "rewrites": [
         {
             "source": "/api/(.*)",
-            "destination": "backend/main.py"
+            "destination": "/backend/main.py"
         },
         {
             "source": "/(.*)",
