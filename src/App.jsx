@@ -8,7 +8,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api'
 
 function App() {
   console.log("EasyConverter Booting...")
-  const [file, setFile] = useState(null)
+  const [files, setFiles] = useState([])
   const [targetFormat, setTargetFormat] = useState('')
   const [taskId, setTaskId] = useState(null)
   const [status, setStatus] = useState('idle') // idle, uploading, processing, completed, failed
@@ -27,25 +27,28 @@ function App() {
   }
 
   const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0]
-    if (selectedFile) {
-      if (selectedFile.size > 4 * 1024 * 1024) {
-        setError('File is too large! limit is 4MB.')
-        setFile(null)
+    const selectedFiles = Array.from(e.target.files)
+    if (selectedFiles.length > 0) {
+      const totalSize = selectedFiles.reduce((acc, file) => acc + file.size, 0)
+      if (totalSize > 4 * 1024 * 1024) {
+        setError('Total size is too large! limit is 4MB.')
+        setFiles([])
         e.target.value = null // Reset input
         return
       }
-      setFile(selectedFile)
+      setFiles(selectedFiles)
       setTargetFormat('')
       setError(null)
     }
   }
 
   const handleUpload = async () => {
-    if (!file || !targetFormat) return
+    if (files.length === 0 || !targetFormat) return
 
     const formData = new FormData()
-    formData.append('file', file)
+    files.forEach(file => {
+      formData.append('files', file)
+    })
 
     try {
       setStatus('uploading')
@@ -86,7 +89,7 @@ function App() {
   }, [status, taskId])
 
   const reset = () => {
-    setFile(null)
+    setFiles([])
     setTargetFormat('')
     setTaskId(null)
     setStatus('idle')
@@ -95,8 +98,9 @@ function App() {
   }
 
   const getTargetOptions = () => {
-    if (!file) return []
-    const ext = file.name.split('.').pop().toLowerCase()
+    if (files.length === 0) return []
+    if (files.length > 1) return ['pdf']
+    const ext = files[0].name.split('.').pop().toLowerCase()
     return allowedFormats[ext] || []
   }
 
@@ -116,17 +120,19 @@ function App() {
               <input
                 type="file"
                 hidden
+                multiple
                 ref={fileInputRef}
                 onChange={handleFileChange}
                 accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg"
               />
               <Upload className="upload-icon" size={48} />
-              <h3>{file ? file.name : 'Select or drop a file'}</h3>
+              <h3>{files.length > 0 ? `${files.length} files selected` : 'Select or drop a file'}</h3>
               <p style={{ marginTop: '8px', color: '#94a3b8' }}>PDF, DOCX, PPTX, Images (Max 4MB)</p>
             </div>
 
-            {file && (
+            {files.length > 0 && (
               <div className="format-selection">
+                {files.length > 1 && <p style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '1rem' }}>Multiple files will be merged into a single PDF</p>}
                 <label className="format-label">Target Format</label>
                 <select
                   value={targetFormat}
