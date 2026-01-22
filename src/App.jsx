@@ -14,7 +14,9 @@ function App() {
   const [status, setStatus] = useState('idle') // idle, uploading, processing, completed, failed
   const [error, setError] = useState(null)
   const [downloadUrl, setDownloadUrl] = useState(null)
+  const [progress, setProgress] = useState(0)
   const fileInputRef = useRef(null)
+  const processingIntervalRef = useRef(null)
 
   const allowedFormats = {
     'pdf': ['docx', 'pptx', 'png', 'jpg'],
@@ -52,14 +54,48 @@ function App() {
 
     try {
       setStatus('uploading')
-      const response = await axios.post(`${API_BASE}/upload?target_format=${targetFormat}`, formData)
+      setProgress(0)
+      setError(null)
+
+      const response = await axios.post(`${API_BASE}/upload?target_format=${targetFormat}`, formData, {
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+          // Map 0-100% upload to 0-70% total progress
+          setProgress(Math.min(percentCompleted * 0.7, 70))
+
+          if (percentCompleted === 100) {
+            setStatus('processing')
+            // Start fake increment from 70% to 95%
+            processingIntervalRef.current = setInterval(() => {
+              setProgress(prev => {
+                if (prev >= 95) {
+                  clearInterval(processingIntervalRef.current)
+                  return 95
+                }
+                return prev + (95 - prev) * 0.1 // Asymptotic approach to 95%
+              })
+            }, 500)
+          }
+        }
+      })
+
+      clearInterval(processingIntervalRef.current)
+      setProgress(100)
       setTaskId(response.data.task_id)
-      setStatus('processing')
+
+      if (response.data.status === 'completed') {
+        setStatus('completed')
+        setDownloadUrl(`${API_BASE}/download/${response.data.task_id}`)
+      } else {
+        setStatus('processing')
+      }
     } catch (err) {
+      clearInterval(processingIntervalRef.current)
       const msg = err.response?.data?.detail || err.message || 'Upload failed'
       setError(msg)
       console.error("Upload Error:", err)
       setStatus('failed')
+      setProgress(0)
     }
   }
 
@@ -71,6 +107,7 @@ function App() {
           const response = await axios.get(`${API_BASE}/status/${taskId}`)
           if (response.data.status === 'completed') {
             setStatus('completed')
+            setProgress(100)
             setDownloadUrl(`${API_BASE}/download/${taskId}`)
             clearInterval(interval)
           } else if (response.data.status === 'failed') {
@@ -85,7 +122,10 @@ function App() {
         }
       }, 2000)
     }
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      clearInterval(processingIntervalRef.current)
+    }
   }, [status, taskId])
 
   const reset = () => {
@@ -93,6 +133,7 @@ function App() {
     setTargetFormat('')
     setTaskId(null)
     setStatus('idle')
+    setProgress(0)
     setError(null)
     setDownloadUrl(null)
   }
@@ -161,7 +202,7 @@ function App() {
             <Loader2 className="upload-icon animate-spin" size={48} />
             <h3>{status === 'uploading' ? 'Uploading...' : 'Converting...'}</h3>
             <div className="progress-bar-container">
-              <div className="progress-bar" style={{ width: status === 'uploading' ? '30%' : '70%' }}></div>
+              <div className="progress-bar" style={{ width: `${progress}%` }}></div>
             </div>
             <p className="status-message">Please wait while we process your file.</p>
           </div>
