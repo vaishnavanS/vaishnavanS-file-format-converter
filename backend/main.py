@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Optional libraries with safety checks for Cloud (Vercel/Linux)
-try:
+try:                                                          
     import fitz  # pymupdf
     HAS_FITZ = True
 except ImportError:
@@ -118,10 +118,10 @@ async def global_exception_handler(request, exc):
 @app.post("/api/upload")
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...), target_format: str = "pdf"):
-    # Enforce Vercel 4MB limit
+    # Enforce Vercel Hobby 4MB limit
     content = await file.read()
     if len(content) > 4 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large (Max 4MB on Vercel)")
+        raise HTTPException(status_code=413, detail="File too large (Max 4MB on Vercel Free Plan)")
     
     file_id = str(uuid.uuid4())
     input_filename = f"{file_id}_{file.filename}"
